@@ -6,7 +6,7 @@ use crate::{
     ActivityGuard, AnyWindowHandle, AppLifecyclePhase, BackgroundExecutor, ClipboardItem,
     CursorStyle, DevicePixels, DisplayId, DummyKeyboardMapper, ForegroundExecutor, Keymap,
     OwnedMenu, Platform, PlatformDisplay, PlatformHeadlessRenderer, PlatformKeyboardLayout,
-    PlatformKeyboardMapper, PlatformTextSystem, PromptButton, ScreenCaptureFrame,
+    PlatformKeyboardMapper, PlatformTextSystem, PromptButton, ReopenRequest, ScreenCaptureFrame,
     ScreenCaptureSource, ScreenCaptureStream, SharedString, SourceMetadata, SystemNotification,
     SystemNotificationResponse, Task, TestDisplay, TestWindow, ThermalState, WindowAppearance,
     WindowParams, size,
@@ -36,6 +36,7 @@ pub(crate) struct TestPlatform {
     pub(crate) active_window: RefCell<Option<TestWindow>>,
     displays: RefCell<Vec<TestDisplay>>,
     displays_changed_callback: RefCell<Option<Box<dyn FnMut()>>>,
+    reopen_request_callback: RefCell<Option<Box<dyn FnMut(ReopenRequest)>>>,
     active_cursor: Mutex<CursorStyle>,
     current_clipboard_item: Mutex<Option<ClipboardItem>>,
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -166,6 +167,17 @@ impl TestPlatform {
         self.displays.borrow_mut().push(display);
     }
 
+    #[cfg(test)]
+    pub(crate) fn simulate_reopen_request(&self, request: ReopenRequest) {
+        let callback = self.reopen_request_callback.borrow_mut().take();
+        if let Some(mut callback) = callback {
+            callback(request);
+            self.reopen_request_callback
+                .borrow_mut()
+                .get_or_insert(callback);
+        }
+    }
+
     pub(crate) fn simulate_display_removed(&self, display_id: DisplayId) {
         self.displays
             .borrow_mut()
@@ -240,6 +252,7 @@ impl TestPlatform {
             active_cursor: Default::default(),
             displays: RefCell::new(vec![TestDisplay::new()]),
             displays_changed_callback: Default::default(),
+            reopen_request_callback: Default::default(),
             active_window: Default::default(),
             expect_restart: Default::default(),
             current_clipboard_item: Mutex::new(None),
@@ -688,6 +701,11 @@ impl Platform for TestPlatform {
 
     fn on_reopen(&self, _callback: Box<dyn FnMut()>) {
         unimplemented!()
+    }
+
+    fn on_reopen_request(&self, callback: Box<dyn FnMut(ReopenRequest)>) -> Result<()> {
+        *self.reopen_request_callback.borrow_mut() = Some(callback);
+        Ok(())
     }
 
     fn on_system_sleep(&self, _callback: Box<dyn FnMut()>) {}

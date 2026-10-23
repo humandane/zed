@@ -4,7 +4,6 @@ use crate::{
     kTISPropertyInputSourceIsASCIICapable, kTISPropertyInputSourceType, kTISTypeKeyboardInputMode,
     ns_string, renderer,
 };
-#[cfg(any(test, feature = "test-support"))]
 use anyhow::Result;
 use block2::RcBlock;
 use dispatch2::DispatchQueue;
@@ -1780,6 +1779,28 @@ impl PlatformWindow for MacWindow {
                 }
             })
             .detach();
+    }
+
+    fn hide(&self) -> Result<()> {
+        let (window, closed, executor) = {
+            let state = self.0.lock();
+            (
+                state.native_window,
+                state.closed.clone(),
+                state.foreground_executor.clone(),
+            )
+        };
+        executor
+            .spawn(async move {
+                if !closed.load(Ordering::Acquire) {
+                    // AppKit may synchronously send activation and occlusion
+                    // notifications, so no window state lock is held here.
+                    let window = unsafe { &*window.cast::<NSWindow>() };
+                    window.orderOut(None);
+                }
+            })
+            .detach();
+        Ok(())
     }
 
     fn request_attention(&self) {

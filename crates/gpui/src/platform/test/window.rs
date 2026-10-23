@@ -1,6 +1,6 @@
 use crate::{
     AnyWindowHandle, Bounds, DevicePixels, DispatchEventResult, DisplayId, GpuSpecs, HeadlessAtlas,
-    Pixels, PlatformAtlas, PlatformDisplay, PlatformHeadlessRenderer, PlatformInput,
+    Pixels, Platform, PlatformAtlas, PlatformDisplay, PlatformHeadlessRenderer, PlatformInput,
     PlatformInputHandler, PlatformWindow, Point, PromptButton, RequestFrameOptions, Scene, Size,
     TestDisplay, TestPlatform, TextInputConfiguration, TextInputStateChange, WindowAppearance,
     WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowInsets, WindowParams,
@@ -412,12 +412,36 @@ impl PlatformWindow for TestWindow {
     }
 
     fn activate(&self) {
-        self.0
-            .lock()
-            .platform
-            .upgrade()
-            .unwrap()
-            .set_active_window(Some(self.clone()))
+        let platform = self.0.lock().platform.upgrade().expect("platform dropped");
+        platform.set_active_window(Some(self.clone()));
+        let window = self.clone();
+        platform
+            .foreground_executor()
+            .spawn(async move {
+                window.simulate_visibility_change(WindowVisibility::Visible);
+            })
+            .detach();
+    }
+
+    fn hide(&self) -> anyhow::Result<()> {
+        let (platform, handle) = {
+            let state = self.0.lock();
+            (
+                state.platform.upgrade().expect("platform dropped"),
+                state.handle,
+            )
+        };
+        if platform.active_window() == Some(handle) {
+            platform.set_active_window(None);
+        }
+        let window = self.clone();
+        platform
+            .foreground_executor()
+            .spawn(async move {
+                window.simulate_visibility_change(WindowVisibility::Hidden);
+            })
+            .detach();
+        Ok(())
     }
 
     fn is_active(&self) -> bool {

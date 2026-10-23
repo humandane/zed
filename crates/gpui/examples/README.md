@@ -134,8 +134,51 @@ clipboard.
 - `set_menus` shows application menu setup.
 - `system_notifications` demonstrates posting, replacing, dismissing, and responding to operating-system notifications.
 - `window` demonstrates creating normal, dialog, popup, and floating windows.
+- `window_lifecycle` exercises retaining a hidden macOS window and reopening it while a popup is visible; see below.
 - `window_positioning` demonstrates window bounds and placement.
 - `window_shadow` demonstrates window shadow styling.
+
+### macOS window lifecycle
+
+`window_lifecycle` uses this checkout's GPUI and macOS backend. It is a focused
+window-lifecycle example, with fixed-size auxiliary `WindowKind::PopUp` geometry.
+The counter, window ID, and root entity ID make retained state visible. No status
+item, menu, audio capture, or external application dependency is involved.
+
+Build an ad hoc bundle, then launch it to get an identifiable Dock icon:
+
+```sh
+bash crates/gpui/examples/bundle_window_lifecycle.sh
+open "target/examples/GPUI Window Lifecycle.app"
+```
+
+The script writes only under the Cargo target directory, signs with the ad hoc
+identity, and never installs the app or changes the keychain. It enables GPUI's
+existing runtime shader feature so a separate Xcode Metal compiler is not needed.
+For the local prototype environment with Rust 1.99.0 installed, prefix the build
+command with `RUSTUP_TOOLCHAIN=1.99.0`; otherwise use the repository's toolchain.
+To launch without a bundle for rendering checks, use
+`cargo run -p gpui --example window_lifecycle --features gpui_platform/runtime_shaders`.
+
+1. Increment the counter a few times and note the window and entity IDs.
+2. Choose **Show panel and hide main**. Only the auxiliary panel should remain.
+3. Choose **Restore main window**. Confirm the counter and IDs are unchanged.
+4. Hide the main window with the panel again, then click the app's Dock icon or
+   open the already-running app from Finder. The same main window should return
+   and the panel should close. Record the source you actually used.
+   Diagnostics count every `has_visible_windows` true/false value, requests
+   received while a panel handle was present, and requests where both were true.
+   The last request also displays `panel_present`, captured before removing the
+   panel. These cumulative counts preserve evidence if an accessibility tool
+   subsequently activates or reopens the app. A panel handle's presence does not
+   itself prove AppKit includes that panel in `hasVisibleWindows`.
+5. Close the main window with its red close button or Command-W. The process
+   should remain running. A Dock click or Finder Open restores it and reports
+   `has_visible_windows = false` when no other window is visible.
+6. Repeat to check retained state. Use **Quit example** or Command-Q to finish.
+
+Buttons support Tab, Shift-Tab, Return, Space, and accessibility activation.
+Other platforms print that the example requires macOS.
 
 ## Specialized examples
 

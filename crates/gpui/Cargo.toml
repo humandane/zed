@@ -231,6 +231,10 @@ name = "window_movable"
 path = "examples/window_movable.rs"
 
 [[example]]
+name = "window_lifecycle"
+path = "examples/window_lifecycle.rs"
+
+[[example]]
 name = "opacity"
 path = "examples/opacity.rs"
 

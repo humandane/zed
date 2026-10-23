@@ -13,9 +13,9 @@ use gpui::{
     Action, ActivationPolicy, ActivityGuard, AnyWindowHandle, BackgroundExecutor, ClipboardItem,
     CursorStyle, ForegroundExecutor, GraphicalEnvironment, KeyContext, Keymap, Menu, MenuItem,
     OsMenu, OwnedMenu, PathPromptOptions, Platform, PlatformDisplay, PlatformKeyboardLayout,
-    PlatformKeyboardMapper, PlatformTextSystem, PlatformWindow, Result, SystemMenuType, Task,
-    ThermalState, WindowAppearance, WindowKind, WindowParams, WindowingRequest,
-    popup::PopupNotSupportedError,
+    PlatformKeyboardMapper, PlatformTextSystem, PlatformWindow, ReopenRequest, Result,
+    SystemMenuType, Task, ThermalState, WindowAppearance, WindowKind, WindowParams,
+    WindowingRequest, popup::PopupNotSupportedError,
 };
 use gpui_apple::{
     keychain,
@@ -174,7 +174,7 @@ pub(crate) struct MacPlatformState {
     application_created: bool,
     general_pasteboard: Pasteboard,
     find_pasteboard: Pasteboard,
-    reopen: Option<Box<dyn FnMut()>>,
+    reopen: Option<Box<dyn FnMut(ReopenRequest)>>,
     on_keyboard_layout_change: Option<Box<dyn FnMut()>>,
     thermal_observer: Option<ThermalObserver>,
     on_displays_changed: Option<Box<dyn FnMut()>>,
@@ -1019,7 +1019,12 @@ impl Platform for MacPlatform {
     }
 
     fn on_reopen(&self, callback: Box<dyn FnMut()>) {
+        self.0.lock().reopen = Some(reopen_without_visible_windows(callback));
+    }
+
+    fn on_reopen_request(&self, callback: Box<dyn FnMut(ReopenRequest)>) -> Result<()> {
         self.0.lock().reopen = Some(callback);
+        Ok(())
     }
 
     fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut()>) {
@@ -1323,20 +1328,28 @@ fn register_system_power_observers(observer: &AnyObject) {
     }
 }
 
+fn reopen_without_visible_windows(mut callback: Box<dyn FnMut()>) -> Box<dyn FnMut(ReopenRequest)> {
+    Box::new(move |request| {
+        if !request.has_visible_windows {
+            callback();
+        }
+    })
+}
+
 extern "C-unwind" fn should_handle_reopen(
     this: &AnyObject,
     _: Sel,
     _: *mut AnyObject,
-    has_open_windows: Bool,
+    has_visible_windows: Bool,
 ) -> Bool {
-    if !has_open_windows.as_bool() {
-        let platform = unsafe { get_mac_platform(this) };
-        let mut lock = platform.0.lock();
-        if let Some(mut callback) = lock.reopen.take() {
-            drop(lock);
-            callback();
-            platform.0.lock().reopen.get_or_insert(callback);
-        }
+    let platform = unsafe { get_mac_platform(this) };
+    let mut lock = platform.0.lock();
+    if let Some(mut callback) = lock.reopen.take() {
+        drop(lock);
+        callback(ReopenRequest {
+            has_visible_windows: has_visible_windows.as_bool(),
+        });
+        platform.0.lock().reopen.get_or_insert(callback);
     }
     Bool::YES
 }
@@ -1552,6 +1565,35 @@ unsafe fn ns_url_to_path(url: *mut AnyObject) -> Result<PathBuf> {
     Ok(PathBuf::from(OsStr::from_bytes(unsafe {
         CStr::from_ptr(path).to_bytes()
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reopen_without_visible_windows;
+    use gpui::ReopenRequest;
+    use std::{cell::Cell, rc::Rc};
+
+    #[test]
+    fn legacy_reopen_handler_ignores_requests_with_visible_windows() {
+        let count = Rc::new(Cell::new(0));
+        let mut callback = reopen_without_visible_windows(Box::new({
+            let count = count.clone();
+            move || count.set(count.get() + 1)
+        }));
+
+        callback(ReopenRequest {
+            has_visible_windows: true,
+        });
+        assert_eq!(count.get(), 0);
+        callback(ReopenRequest {
+            has_visible_windows: false,
+        });
+        assert_eq!(count.get(), 1);
+        callback(ReopenRequest {
+            has_visible_windows: true,
+        });
+        assert_eq!(count.get(), 1);
+    }
 }
 
 #[link(name = "Carbon", kind = "framework")]

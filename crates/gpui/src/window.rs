@@ -6670,6 +6670,17 @@ impl Window {
         self.platform_window.activate();
     }
 
+    /// Hides this window without closing it or dropping its root view.
+    ///
+    /// Restore the same window with [`Self::activate_window`]. This does not
+    /// hide other application windows or invoke the window's close handler.
+    /// Currently supported on macOS; other platforms return an error.
+    /// The request is applied asynchronously, with visibility changes delivered
+    /// through [`Self::observe_window_visibility`].
+    pub fn hide_window(&self) -> Result<()> {
+        self.platform_window.hide()
+    }
+
     /// Requests that the operating system draw attention to this window.
     pub fn request_attention(&self) {
         self.platform_window.request_attention();
@@ -8223,6 +8234,80 @@ mod tests {
             .update(cx, |_, window, _| assert!(window.is_visible()))
             .unwrap();
         assert_eq!(test_window.frame_wake_count(), frame_wake_count);
+    }
+
+    #[gpui::test]
+    fn test_hide_window_preserves_root_and_other_windows(cx: &mut TestAppContext) {
+        use crate::WindowVisibility;
+
+        let main_window = cx.add_window(|_, _| EmptyView);
+        let panel = cx.add_window(|_, _| EmptyView);
+        let root_id = main_window.root(cx).expect("main window root").entity_id();
+        let observed = Rc::new(RefCell::new(Vec::new()));
+        let _subscription = main_window
+            .update(cx, {
+                let observed = observed.clone();
+                move |_, window, _| {
+                    window.observe_window_visibility(move |visibility, _, _| {
+                        observed.borrow_mut().push(visibility);
+                    })
+                }
+            })
+            .expect("observe main window");
+        main_window
+            .update(cx, |_, window, _| window.activate_window())
+            .expect("activate main window");
+        cx.run_until_parked();
+
+        main_window
+            .update(cx, |_, window, _| window.hide_window())
+            .expect("main window exists")
+            .expect("hide main window");
+        cx.run_until_parked();
+        main_window
+            .update(cx, |_, window, _| {
+                assert!(!window.is_visible());
+                assert!(!window.is_window_active());
+            })
+            .expect("hidden window remains registered");
+        panel
+            .update(cx, |_, window, _| window.activate_window())
+            .expect("activate panel");
+        cx.run_until_parked();
+        main_window
+            .update(cx, |_, window, _| window.hide_window())
+            .expect("main window still exists")
+            .expect("hiding again is harmless");
+        cx.run_until_parked();
+        panel
+            .update(cx, |_, window, _| {
+                assert!(window.is_visible());
+                assert!(window.is_window_active());
+            })
+            .expect("panel remains visible and active");
+        assert_eq!(
+            main_window.root(cx).expect("retained root").entity_id(),
+            root_id
+        );
+
+        main_window
+            .update(cx, |_, window, _| window.activate_window())
+            .expect("restore the same main window");
+        cx.run_until_parked();
+        main_window
+            .update(cx, |_, window, _| {
+                assert!(window.is_visible());
+                assert!(window.is_window_active());
+            })
+            .expect("restored main window");
+        assert_eq!(
+            main_window.root(cx).expect("restored root").entity_id(),
+            root_id
+        );
+        assert_eq!(
+            *observed.borrow(),
+            [WindowVisibility::Hidden, WindowVisibility::Visible]
+        );
     }
 
     /// App learns display state from the platform's display notifications,

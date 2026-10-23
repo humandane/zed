@@ -51,8 +51,8 @@ use crate::{
     FocusMap, ForegroundExecutor, Global, KeyBinding, KeyContext, Keymap, Keystroke, LayoutId,
     Menu, MenuItem, MissingGlyph, OwnedMenu, PathPromptOptions, Pixels, Platform, PlatformDisplay,
     PlatformKeyboardLayout, PlatformKeyboardMapper, Point, Priority, PromptBuilder, PromptButton,
-    PromptHandle, PromptLevel, Render, RenderImage, RenderablePromptHandle, Reservation,
-    ScreenCaptureSource, SharedString, SubscriberSet, Subscription, SvgRenderer,
+    PromptHandle, PromptLevel, Render, RenderImage, RenderablePromptHandle, ReopenRequest,
+    Reservation, ScreenCaptureSource, SharedString, SubscriberSet, Subscription, SvgRenderer,
     SystemNotification, SystemNotificationResponse, Task, TextRenderingMode, TextSystem,
     ThermalState, Window, WindowAppearance, WindowButtonLayout, WindowHandle, WindowId,
     WindowInvalidator, WindowingRequest,
@@ -332,6 +332,8 @@ impl Application {
 
     /// Invokes a handler when an already-running application is launched.
     /// On macOS, this can occur when the application icon is double-clicked or the app is launched via the dock.
+    /// On macOS, the handler only runs when AppKit reports no visible windows.
+    /// Use [`Self::on_reopen_request`] to handle requests while a panel is visible.
     pub fn on_reopen<F>(&self, mut callback: F) -> &Self
     where
         F: 'static + FnMut(&mut App),
@@ -343,6 +345,28 @@ impl Application {
             }
         }));
         self
+    }
+
+    /// Registers a handler for every request to reopen an already-running application,
+    /// including requests made while some of its windows are visible.
+    ///
+    /// On macOS, these requests include clicking the application's Dock icon.
+    /// This replaces any handler registered with [`Self::on_reopen`], and vice versa.
+    /// Currently supported on macOS; other platforms return an error.
+    pub fn on_reopen_request<F>(&self, mut callback: F) -> Result<&Self>
+    where
+        F: 'static + FnMut(ReopenRequest, &mut App),
+    {
+        let this = Rc::downgrade(&self.0);
+        self.0
+            .borrow()
+            .platform
+            .on_reopen_request(Box::new(move |request| {
+                if let Some(app) = this.upgrade() {
+                    callback(request, &mut app.borrow_mut());
+                }
+            }))?;
+        Ok(self)
     }
 
     /// Returns a handle to the [`BackgroundExecutor`] associated with this app, which can be used to spawn futures in the background.
@@ -3699,6 +3723,36 @@ mod test {
         AppContext, Context, Empty, FallbackFontClass, IntoElement, MissingGlyph, Render,
         TestAppContext, Window,
     };
+
+    #[gpui::test]
+    fn reopen_request_includes_visible_windows(cx: &mut TestAppContext) {
+        let app = super::Application(cx.app.clone());
+        let observed = Rc::new(RefCell::new(Vec::new()));
+        app.on_reopen_request({
+            let observed = observed.clone();
+            move |request, cx| {
+                observed.borrow_mut().push((request, cx.windows().len()));
+            }
+        })
+        .expect("register unfiltered reopen handler");
+        let _window = cx.add_window(|_, _| RenderCounter(Rc::new(Cell::new(0))));
+
+        for has_visible_windows in [true, false, true] {
+            cx.test_platform()
+                .simulate_reopen_request(crate::ReopenRequest {
+                    has_visible_windows,
+                });
+        }
+        assert_eq!(
+            *observed.borrow(),
+            [true, false, true].map(|has_visible_windows| (
+                crate::ReopenRequest {
+                    has_visible_windows
+                },
+                1,
+            ))
+        );
+    }
 
     #[gpui::test]
     fn app_borrow_diagnostics(cx: &mut TestAppContext) {

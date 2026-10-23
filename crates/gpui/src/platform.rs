@@ -83,6 +83,16 @@ pub use app_menu::*;
 pub use keyboard::*;
 pub use keystroke::*;
 
+/// A request to reopen an already-running application.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReopenRequest {
+    /// Whether the platform reports any visible application windows.
+    ///
+    /// On macOS, this is AppKit's `hasVisibleWindows` value. A visible panel
+    /// can make it true even when the application's main window is hidden.
+    pub has_visible_windows: bool,
+}
+
 /// Whether the platform is presenting a window's frames.
 ///
 /// This is about presentation, not the window's shown/hidden state: a shown
@@ -462,6 +472,12 @@ pub trait Platform: 'static {
 
     fn on_quit(&self, callback: Box<dyn FnMut() -> bool>);
     fn on_reopen(&self, callback: Box<dyn FnMut()>);
+    /// Registers a reopen handler that also runs when application windows are
+    /// visible. Replaces any handler installed by [`Self::on_reopen`].
+    /// Returns an error when the platform does not support this registration.
+    fn on_reopen_request(&self, _callback: Box<dyn FnMut(ReopenRequest)>) -> Result<()> {
+        anyhow::bail!("unfiltered reopen requests are not supported on this platform")
+    }
     /// Registers the callback invoked when the system is about to sleep.
     fn on_system_sleep(&self, callback: Box<dyn FnMut()>);
     /// Registers the callback invoked when the system resumes from sleep.
@@ -1252,6 +1268,11 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
         answers: &[PromptButton],
     ) -> Option<oneshot::Receiver<usize>>;
     fn activate(&self);
+    /// Hides this window without closing it. Restore it with [`Self::activate`].
+    /// Returns an error when the platform does not support hiding a window.
+    fn hide(&self) -> Result<()> {
+        anyhow::bail!("hiding individual windows is not supported on this platform")
+    }
     /// Requests that the operating system draw attention to this window.
     fn request_attention(&self) {}
     fn is_active(&self) -> bool;
