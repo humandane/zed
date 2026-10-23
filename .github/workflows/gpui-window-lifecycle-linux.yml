@@ -1,0 +1,62 @@
+# Focused supplement to the macOS validation of codex-menu-bar-window-lifecycle.
+# The package subset follows script/linux and the selected GPUI backend manifests.
+# This intentionally does not invoke script/bootstrap or build the Zed application.
+name: GPUI window lifecycle Linux
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - codex-menu-bar-window-lifecycle
+
+permissions:
+  contents: read
+
+jobs:
+  gpui-linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      RUSTUP_TOOLCHAIN: '1.99.0'
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: '1'
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_BUILD_JOBS: '2'
+      CC: clang
+      CXX: clang++
+    steps:
+      - name: Check out the requested revision
+        # Same official checkout action revision used by upstream run_tests.yml.
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+
+      - name: Install GPUI build and link dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang cmake pkg-config \
+            libfontconfig-dev libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev
+
+      - name: Install the locally verified Rust version
+        run: |
+          rustup toolchain install 1.99.0 --profile minimal
+          rustc +1.99.0 --version
+          cargo +1.99.0 --version
+
+      - name: Check GPUI and native Linux trait implementations
+        run: >-
+          cargo +1.99.0 check --locked --lib
+          -p gpui -p gpui_linux --features gpui/test-support
+
+      - name: Test retained window identity and visibility isolation
+        run: >-
+          cargo +1.99.0 test --locked --lib -p gpui --features test-support
+          window::tests::test_hide_window_preserves_root_and_other_windows -- --exact
+
+      - name: Test unfiltered reopen request delivery
+        run: >-
+          cargo +1.99.0 test --locked --lib -p gpui --features test-support
+          app::test::reopen_request_includes_visible_windows -- --exact
